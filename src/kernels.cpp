@@ -67,6 +67,12 @@ void WTo3Pi(input_stream<int32> * __restrict in_H, input_stream<int32> * __restr
         // halve the size from 32b to 16b
         pdg_ids[i] = foo.pack();
     }
+    
+    #if defined(__X86SIM__) && defined(__X86DEBUG__)
+    printf("first eta chunk:\n");
+    aie::print(etas[0]);
+    printf("\n");
+    #endif
 
     // FILTER PDG ID AND ISOLATION, DIVIDE INTO PT CATEGORIES
     // pdg id variables
@@ -160,10 +166,11 @@ void WTo3Pi(input_stream<int32> * __restrict in_H, input_stream<int32> * __restr
     int16 eta_hig_pt_target0, eta_hig_pt_target1, eta_hig_pt_target2;
     int16 phi_hig_pt_target0, phi_hig_pt_target1, phi_hig_pt_target2;
     int16 pt_hig_pt_target0, pt_hig_pt_target1, pt_hig_pt_target2;
-    aie::mask<V_SIZE> mask_hig_pt_cur0, mask_hig_pt_cur1;
+    aie::mask<V_SIZE> mask_hig_pt_cur0[P_BUNCHES], mask_hig_pt_cur1[P_BUNCHES];
     aie::mask<V_SIZE> angsep0[P_BUNCHES], angsep1[P_BUNCHES];
 
-    int16 d_eta_scalar, d_phi_scalar, dr2_scalar;
+    int16 d_eta_scalar, d_phi_scalar;
+    int32 dr2_scalar;
     float dr2_float_scalar;
 
     // triplet variables
@@ -173,6 +180,7 @@ void WTo3Pi(input_stream<int32> * __restrict in_H, input_stream<int32> * __restr
     float px0, py0, pz0, px1, py1, pz1, px2, py2, pz2;
     float e0, e1, e2;
     float px_tot, py_tot, pz_tot, e_tot;
+    float x, sinh;
     float invariant_mass;
 
     aie::vector<float, 4> triplet = aie::zeros<float, 4>();
@@ -184,12 +192,21 @@ void WTo3Pi(input_stream<int32> * __restrict in_H, input_stream<int32> * __restr
             if (!mask_hig_pt[i].test(j)) continue;
 
             hig_target_idx0 = j;
+            #if defined(__X86SIM__) && defined(__X86DEBUG__)
+            printf("hig_target_idx0 = %d (j)\n", hig_target_idx0);
+            #endif
             eta_hig_pt_target0 = etas[i][hig_target_idx0];
             phi_hig_pt_target0 = phis[i][hig_target_idx0];
             pt_hig_pt_target0 = pts[i][hig_target_idx0];
 
-            mask_hig_pt_cur0 = mask_hig_pt[i];
-            mask_hig_pt_cur0.clear(hig_target_idx0);
+            mask_hig_pt_cur0[i] = mask_hig_pt[i];
+            mask_hig_pt_cur0[i].clear(hig_target_idx0);
+
+            #if defined(__X86SIM__) && defined(__X86DEBUG__)
+            printf("mask_hig_pt_cur0[i = %d]:\n", i);
+            aie::print(mask_hig_pt_cur0[i]);
+            printf("\n");
+            #endif
 
             for (int k=0; k<P_BUNCHES; k++)
             {
@@ -211,30 +228,37 @@ void WTo3Pi(input_stream<int32> * __restrict in_H, input_stream<int32> * __restr
                 dr2_float = acc_float.to_vector<float>(0);
 
                 is_ge_mindr2 = aie::ge(dr2_float, MINDR2_ANGSEP_FLOAT);
-                angsep0[k] = is_ge_mindr2 & mask_hig_pt_cur0;
+                angsep0[k] = is_ge_mindr2 & mask_hig_pt_cur0[k];
 
                 for (int jj=0; jj<V_SIZE; jj++)
                 {
                     if (!angsep0[k].test(jj)) continue;
 
+                    #if defined(__X86SIM__) && defined(__X86DEBUG__)
+                    printf("angsep0[k = %d]:\n", k);
+                    aie::print(angsep0[k]);
+                    printf("\n");
+                    #endif
+
                     hig_target_idx1 = jj;
+                    #if defined(__X86SIM__) && defined(__X86DEBUG__)
+                    printf("hig_target_idx1 = %d (jj)\n", hig_target_idx1);
+                    #endif
                     eta_hig_pt_target1 = etas[k][hig_target_idx1];
                     phi_hig_pt_target1 = phis[k][hig_target_idx1];
                     pt_hig_pt_target1 = pts[k][hig_target_idx1];
 
-                    mask_hig_pt_cur1 = mask_hig_pt_cur0;
-                    mask_hig_pt_cur1.clear(hig_target_idx1);
+                    mask_hig_pt_cur1[k] = mask_hig_pt_cur0[k];
+                    mask_hig_pt_cur1[k].clear(hig_target_idx1);
+
+                    #if defined(__X86SIM__) && defined(__X86DEBUG__)
+                    printf("mask_hig_pt_cur1[k = %d]:\n", k);
+                    aie::print(mask_hig_pt_cur1[i]);
+                    printf("\n");
+                    #endif
 
                     for (int kk=0; kk<P_BUNCHES; kk++)
                     {
-                        #if defined(__X86SIM__) && defined(__X86DEBUG__)
-                        printf("i = %d, j = %d, k = %d, jj = %d, kk = %d \n", i, j, k, jj, kk);
-                        printf("eta_hig_pt_target1 = %i\n", eta_hig_pt_target1);
-                        printf("etas[kk]:\n");
-                        aie::print(etas[kk]);
-                        printf("\n\n");
-                        #endif
-
                         d_eta = aie::sub(eta_hig_pt_target1, etas[kk]);
 
                         d_phi = aie::sub(phi_hig_pt_target1, phis[kk]);
@@ -253,24 +277,48 @@ void WTo3Pi(input_stream<int32> * __restrict in_H, input_stream<int32> * __restr
                         dr2_float = acc_float.to_vector<float>(0);
 
                         is_ge_mindr2 = aie::ge(dr2_float, MINDR2_ANGSEP_FLOAT);
-                        angsep1[kk] = is_ge_mindr2 & mask_hig_pt_cur1;
+                        angsep1[kk] = is_ge_mindr2 & mask_hig_pt_cur1[kk];
 
                         for (int jjj=0; jjj<V_SIZE; jjj++)
                         {
                             if (!angsep1[kk].test(jjj)) continue;
 
+                            #if defined(__X86SIM__) && defined(__X86DEBUG__)
+                            printf("angsep1[kk = %d]:\n", kk);
+                            aie::print(angsep1[kk]);
+                            printf("\n");
+                            #endif
+
                             hig_target_idx2 = jjj;
+                            #if defined(__X86SIM__) && defined(__X86DEBUG__)
+                            printf("hig_target_idx2 = %d (jjj)\n", hig_target_idx2);
+                            #endif
                             eta_hig_pt_target2 = etas[kk][hig_target_idx2];
                             phi_hig_pt_target2 = phis[kk][hig_target_idx2];
                             pt_hig_pt_target2 = pts[kk][hig_target_idx2];
 
                             d_eta_scalar = eta_hig_pt_target2 - eta_hig_pt_target0;
+                            #if defined(__X86SIM__) && defined(__X86DEBUG__)
+                            printf("d_eta_scalar = %d \n", d_eta_scalar);
+                            #endif
 
                             d_phi_scalar = phi_hig_pt_target2 - phi_hig_pt_target0;
+                            #if defined(__X86SIM__) && defined(__X86DEBUG__)
+                            printf("d_phi_scalar = %d \n", d_phi_scalar);
+                            #endif
                             d_phi_scalar = (d_phi_scalar <= PI) ? ((d_phi_scalar >= MPI) ? d_phi_scalar : d_phi_scalar + TWOPI) : d_phi_scalar + MTWOPI;
+                            #if defined(__X86SIM__) && defined(__X86DEBUG__)
+                            printf("d_phi_scalar (adjusted) = %d \n", d_phi_scalar);
+                            #endif
 
                             dr2_scalar = d_eta_scalar * d_eta_scalar + d_phi_scalar * d_phi_scalar;
+                            #if defined(__X86SIM__) && defined(__X86DEBUG__)
+                            printf("dr2_scalar = %i \n", dr2_scalar);
+                            #endif
                             dr2_float_scalar = dr2_scalar * F_CONV2;
+                            #if defined(__X86SIM__) && defined(__X86DEBUG__)
+                            printf("dr2_float_scalar = %f \n", dr2_float_scalar);
+                            #endif
 
                             if (dr2_float_scalar >= MINDR2_ANGSEP_FLOAT)
                             {
@@ -279,33 +327,66 @@ void WTo3Pi(input_stream<int32> * __restrict in_H, input_stream<int32> * __restr
                                 charge2 = (pdg_ids[kk][hig_target_idx2] >= 4) ? ((pdg_ids[kk][hig_target_idx2] == 4) ? -1 : 1) : ((pdg_ids[kk][hig_target_idx2] == 2) ? -1 : 1);
 
                                 charge_tot = charge0 + charge1 + charge2;
+                                #if defined(__X86SIM__) && defined(__X86DEBUG__)
+                                printf("charge_tot = %d \n", charge_tot);
+                                #endif
 
                                 if ((charge_tot == 1) | (charge_tot == -1))
                                 {
                                     mass0 = (charge0 > 0) ? MASS_M : MASS_P;
                                     px0 = pt_hig_pt_target0 * PT_CONV * aie::cos(phi_hig_pt_target0 * F_CONV);
+                                    #if defined(__X86SIM__) && defined(__X86DEBUG__)
+                                    printf("px0 = %f \n", px0);
+                                    #endif
                                     py0 = pt_hig_pt_target0 * PT_CONV * aie::sin(phi_hig_pt_target0 * F_CONV);
-                                    pz0 = pt_hig_pt_target0 * PT_CONV * sinh(phi_hig_pt_target0 * F_CONV);
+                                    #if defined(__X86SIM__) && defined(__X86DEBUG__)
+                                    printf("py0 = %f \n", py0);
+                                    #endif
+                                    x = eta_hig_pt_target0 * F_CONV;
+                                    sinh = x + ((x * x * x) / 6);
+                                    pz0 = pt_hig_pt_target0 * PT_CONV * sinh;
+                                    #if defined(__X86SIM__) && defined(__X86DEBUG__)
+                                    printf("pz0 = %f \n", pz0);
+                                    #endif
                                     e0 = aie::sqrt(px0 * px0 + py0 * py0 + pz0 * pz0 + mass0 * mass0);
+                                    #if defined(__X86SIM__) && defined(__X86DEBUG__)
+                                    printf("e0 = %f \n", e0);
+                                    #endif
                             
                                     mass1 = (charge1 > 0) ? MASS_M : MASS_P;
                                     px1 = pt_hig_pt_target1 * PT_CONV * aie::cos(phi_hig_pt_target1 * F_CONV);
                                     py1 = pt_hig_pt_target1 * PT_CONV * aie::sin(phi_hig_pt_target1 * F_CONV);
-                                    pz1 = pt_hig_pt_target1 * PT_CONV * sinh(phi_hig_pt_target1 * F_CONV);
+                                    x = eta_hig_pt_target1 * F_CONV;
+                                    sinh = x + ((x * x * x) / 6);
+                                    pz1 = pt_hig_pt_target1 * PT_CONV * sinh;
                                     e1 = aie::sqrt(px1 * px1 + py1 * py1 + pz1 * pz1 + mass1 * mass1);
+                                    #if defined(__X86SIM__) && defined(__X86DEBUG__)
+                                    printf("e1 = %f \n", e1);
+                                    #endif
 
                                     mass2 = (charge2 > 0) ? MASS_M : MASS_P;
                                     px2 = pt_hig_pt_target2 * PT_CONV * aie::cos(phi_hig_pt_target2 * F_CONV);
                                     py2 = pt_hig_pt_target2 * PT_CONV * aie::sin(phi_hig_pt_target2 * F_CONV);
-                                    pz2 = pt_hig_pt_target2 * PT_CONV * sinh(phi_hig_pt_target2 * F_CONV);
+                                    x = eta_hig_pt_target2 * F_CONV;
+                                    sinh = x + ((x * x * x) / 6);
+                                    pz2 = pt_hig_pt_target2 * PT_CONV * sinh;
                                     e2 = aie::sqrt(px2 * px2 + py2 * py2 + pz2 * pz2 + mass2 * mass2);
+                                    #if defined(__X86SIM__) && defined(__X86DEBUG__)
+                                    printf("e2 = %f \n", e2);
+                                    #endif
 
                                     px_tot = px0 + px1 + px2;
                                     py_tot = py0 + py1 + py2;
                                     pz_tot = pz0 + pz1 + pz2;
                                     e_tot = e0 + e1 + e2;
+                                    #if defined(__X86SIM__) && defined(__X86DEBUG__)
+                                    printf("e_tot = %f \n", e_tot);
+                                    #endif
 
                                     invariant_mass = aie::sqrt(e_tot * e_tot - px_tot * px_tot - py_tot * py_tot - pz_tot * pz_tot);
+                                    #if defined(__X86SIM__) && defined(__X86DEBUG__)
+                                    printf("invariant_mass = %f \n", invariant_mass);
+                                    #endif
 
                                     if ((invariant_mass >= MIN_MASS) && (invariant_mass <= MAX_MASS))
                                     {
@@ -319,6 +400,11 @@ void WTo3Pi(input_stream<int32> * __restrict in_H, input_stream<int32> * __restr
                                             triplet[2] = kk * V_SIZE + hig_target_idx2;
                                             triplet[3] = invariant_mass;
                                         }
+                                        #if defined(__X86SIM__) && defined(__X86DEBUG__)
+                                        printf("triplet:\n");
+                                        aie::print(triplet);
+                                        printf("\n");
+                                        #endif
                                     }
                                 }
                             }
@@ -330,5 +416,9 @@ void WTo3Pi(input_stream<int32> * __restrict in_H, input_stream<int32> * __restr
     }
 
     writeincr(out, triplet);
+
+    #if defined(__X86SIM__) && defined(__X86DEBUG__)
+    printf("\n\n");
+    #endif
 }
 
