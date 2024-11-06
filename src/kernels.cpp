@@ -7,7 +7,7 @@
 
 using namespace adf;
 
-void WTo3Pi(input_stream<int32> * __restrict in_H, input_stream<int32> * __restrict in_L, output_stream<float> * __restrict out)
+void unpacker(input_stream<int32> * __restrict in_H, input_stream<int32> * __restrict in_L, output_stream<int16> * __restrict out0, output_stream<int16> * __restrict out1)
 {   
     // data variables
     aie::vector<int32, V_SIZE> data_H[P_BUNCHES], data_L[P_BUNCHES]; 
@@ -73,8 +73,43 @@ void WTo3Pi(input_stream<int32> * __restrict in_H, input_stream<int32> * __restr
     aie::print(etas[0]);
     printf("\n");
     #endif
+    
+    for (int i=0; i<P_BUNCHES; i++)
+    {
+        writeincr(out0, pts[i]);
+        writeincr(out1, etas[i]);
+    }
 
-    // FILTER PDG ID AND ISOLATION, DIVIDE INTO PT CATEGORIES
+    for (int i=0; i<P_BUNCHES; i++)
+    {   
+        writeincr(out0, phis[i]);
+        writeincr(out1, pdg_ids[i]);
+    }
+}
+
+void filter(input_stream<int16> * __restrict in0, input_stream<int16> * __restrict in1, output_stream<int16> * __restrict out0, output_stream<int16> * __restrict out1)
+{
+    // data variables
+    aie::vector<int32, V_SIZE> data_H[P_BUNCHES], data_L[P_BUNCHES]; 
+    aie::vector<int16, V_SIZE> etas[P_BUNCHES], phis[P_BUNCHES], pts[P_BUNCHES], pdg_ids[P_BUNCHES];
+    
+    // auxiliary variables
+    aie::vector<int16, V_SIZE> zeros_vector = aie::zeros<int16, V_SIZE>();
+
+    // READ DATA 
+    for (int i=0; i<P_BUNCHES; i++)
+    {
+        pts[i] = readincr_v<V_SIZE>(in0);
+        etas[i] = readincr_v<V_SIZE>(in1);
+    }
+
+    for (int i=0; i<P_BUNCHES; i++)
+    {
+        phis[i] = readincr_v<V_SIZE>(in0);
+        pdg_ids[i] = readincr_v<V_SIZE>(in1);
+    }
+
+    // FILTER PDG ID AND ISOLATION
     // pdg id variables
     aie::mask<V_SIZE> pdg_id_tot_mask[P_BUNCHES], pdg_id_mask1, pdg_id_mask2, pdg_id_mask3, pdg_id_mask4;
 
@@ -96,9 +131,6 @@ void WTo3Pi(input_stream<int32> * __restrict in_H, input_stream<int32> * __restr
     aie::vector<int16, V_SIZE> mpi_vector = aie::broadcast<int16, V_SIZE>(MPI);
     aie::vector<int16, V_SIZE> twopi_vector = aie::broadcast<int16, V_SIZE>(TWOPI);
     aie::vector<int16, V_SIZE> mtwopi_vector = aie::broadcast<int16, V_SIZE>(MTWOPI);
-
-    // pt groups variables
-    aie::mask<V_SIZE> mask_hig_pt[P_BUNCHES];
 
     for (int i=0; i<P_BUNCHES; i++)
     {
@@ -151,22 +183,71 @@ void WTo3Pi(input_stream<int32> * __restrict in_H, input_stream<int32> * __restr
 
         filter_mask[i] = iso_mask[i] & pdg_id_tot_mask[i];
 
-        etas[i] = aie::select(zeros_vector, etas[i], filter_mask[i]); 
         phis[i] = aie::select(zeros_vector, phis[i], filter_mask[i]); 
+        etas[i] = aie::select(zeros_vector, etas[i], filter_mask[i]); 
         pts[i] = aie::select(zeros_vector, pts[i], filter_mask[i]); 
         pdg_ids[i] = aie::select(zeros_vector, pdg_ids[i], filter_mask[i]); 
+    }
 
-        // assign masks for pt groups
-        mask_hig_pt[i] = aie::ge(pts[i], HIG_PT);
+    for (int i=0; i<P_BUNCHES; i++)
+    {
+        writeincr(out0, pts[i]);
+        writeincr(out1, etas[i]);
+    }
+
+    for (int i=0; i<P_BUNCHES; i++)
+    {   
+        writeincr(out0, phis[i]);
+        writeincr(out1, pdg_ids[i]);
+    }
+}
+
+void combinatorial(input_stream<int16> * __restrict in0, input_stream<int16> * __restrict in1, output_stream<float> * __restrict out)
+{
+    // data variables
+    aie::vector<int16, V_SIZE> etas[P_BUNCHES], phis[P_BUNCHES], pts[P_BUNCHES], pdg_ids[P_BUNCHES];
+    // auxiliary variables
+    aie::vector<int16, V_SIZE> zeros_vector = aie::zeros<int16, V_SIZE>();
+
+    // READ DATA 
+    for (int i=0; i<P_BUNCHES; i++)
+    {
+        pts[i] = readincr_v<V_SIZE>(in0);
+        etas[i] = readincr_v<V_SIZE>(in1);
+    }
+
+    for (int i=0; i<P_BUNCHES; i++)
+    {
+        phis[i] = readincr_v<V_SIZE>(in0);
+        pdg_ids[i] = readincr_v<V_SIZE>(in1);
     }
 
     // ANGULAR SEPARATION OF HIGH PT PARTICLES TO FIND THE TRIPLET
-    // ang sep variables
+    // variables to compute required quantities
+    int16 eta_cur, phi_cur, pt_cur, pt_sum;
+    aie::vector<int16, V_SIZE> d_eta, d_phi;
+    aie::vector<int16, V_SIZE> pt_to_sum;
+    aie::vector<int32, V_SIZE> dr2;
+    aie::vector<float, V_SIZE> dr2_float;
+    aie::accum<acc48, V_SIZE> acc;
+    aie::accum<accfloat, V_SIZE> acc_float;
+    aie::mask<V_SIZE> is_ge_mindr2, is_le_maxdr2, pt_cut_mask;
+    aie::mask<V_SIZE> iso_mask[P_BUNCHES], filter_mask[P_BUNCHES];
+
+    // variables for the two-pi check
+    aie::mask<V_SIZE> is_gt_pi, is_lt_mpi;
+    aie::vector<int16, V_SIZE> d_phi_ptwopi, d_phi_mtwopi;
+    aie::vector<int16, V_SIZE> pi_vector = aie::broadcast<int16, V_SIZE>(PI);
+    aie::vector<int16, V_SIZE> mpi_vector = aie::broadcast<int16, V_SIZE>(MPI);
+    aie::vector<int16, V_SIZE> twopi_vector = aie::broadcast<int16, V_SIZE>(TWOPI);
+    aie::vector<int16, V_SIZE> mtwopi_vector = aie::broadcast<int16, V_SIZE>(MTWOPI);
+
+    // ang sep specific variables
     int16 hig_target_idx0, hig_target_idx1, hig_target_idx2;
     int16 eta_hig_pt_target0, eta_hig_pt_target1, eta_hig_pt_target2;
     int16 phi_hig_pt_target0, phi_hig_pt_target1, phi_hig_pt_target2;
     int16 pt_hig_pt_target0, pt_hig_pt_target1, pt_hig_pt_target2;
-    aie::mask<V_SIZE> mask_hig_pt_cur0[P_BUNCHES], mask_hig_pt_cur1[P_BUNCHES];
+    aie::mask<V_SIZE> mask_hig_pt[P_BUNCHES], mask_hig_pt_cur0[P_BUNCHES], mask_hig_pt_cur1[P_BUNCHES];
     aie::mask<V_SIZE> angsep0[P_BUNCHES], angsep1[P_BUNCHES];
 
     int16 d_eta_scalar, d_phi_scalar;
@@ -187,6 +268,8 @@ void WTo3Pi(input_stream<int32> * __restrict in_H, input_stream<int32> * __restr
 
     for (int i=0; i<P_BUNCHES; i++)
     {   
+        mask_hig_pt[i] = aie::ge(pts[i], HIG_PT);
+
         for (int j=0; j<V_SIZE; j++)
         {   
             if (!mask_hig_pt[i].test(j)) continue;
@@ -421,4 +504,3 @@ void WTo3Pi(input_stream<int32> * __restrict in_H, input_stream<int32> * __restr
     printf("\n\n");
     #endif
 }
-
