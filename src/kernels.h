@@ -6,6 +6,7 @@
 #define V_SIZE 32
 #define EV_SIZE 224
 #define P_BUNCHES 7
+#define BUF_SIZE 224
 
 // #define __X86DEBUG__ 
 // #define __X86PTCUTDEBUG__
@@ -40,10 +41,17 @@ static const float MASS_P = 0.13957039;
 
 using namespace adf;
 
-void unpacker(input_stream<int32> * __restrict in_H, input_stream<int32> * __restrict in_L, output_stream<int16> * __restrict out0, output_stream<int16> * __restrict out1);
+void unpacker(input_stream<int32> * __restrict in_H, input_stream<int32> * __restrict in_L, 
+                output_buffer<int16> & __restrict pt_out, output_buffer<int16> & __restrict eta_out, 
+                output_buffer<int16> & __restrict phi_out, output_buffer<int16> & __restrict pdg_id_out);
 
-void filter(input_stream<int16> * __restrict in0, input_stream<int16> * __restrict in1, output_stream<int16> * __restrict out0, output_stream<int16> * __restrict out1);
+void filter(input_buffer<int16> & __restrict pt_in, input_buffer<int16> & __restrict eta_in, 
+                input_buffer<int16> & __restrict phi_in, input_buffer<int16> & __restrict pdg_id_in,
+                output_buffer<int16> & __restrict pt_out, output_buffer<int16> & __restrict eta_out, 
+                output_buffer<int16> & __restrict phi_out, output_buffer<int16> & __restrict pdg_id_out);
 
-void combinatorial(input_stream<int16> * __restrict in0, input_stream<int16> * __restrict in1, output_stream<float> * __restrict out);
+void combinatorial(input_buffer<int16> & __restrict pt_in, input_buffer<int16> & __restrict eta_in, 
+                    input_buffer<int16> & __restrict phi_in, input_buffer<int16> & __restrict pdg_id_in,
+                    output_stream<float> * __restrict out);
 
 #endif
