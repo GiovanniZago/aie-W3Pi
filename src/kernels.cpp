@@ -14,8 +14,12 @@ void unpacker(input_stream<int32> * __restrict in_H, input_stream<int32> * __res
     aie::vector<int16, V_SIZE> etas[P_BUNCHES], phis[P_BUNCHES], pts[P_BUNCHES], pdg_ids[P_BUNCHES];
 
     // auxiliary variables
-    aie::vector<int32, V_SIZE> foo, foo1, foo2;
+    aie::vector<int32, V_SIZE> foo, foo1, foo2, foo3;
     aie::vector<int16, V_SIZE> zeros_vector = aie::zeros<int16, V_SIZE>();
+
+    // pt cut variables
+    aie::mask<V_SIZE> mask_hig_pt[P_BUNCHES];
+    int16 hig_pt_count=0;
 
     for (int i=0; i<P_BUNCHES; i++)
     {
@@ -30,6 +34,9 @@ void unpacker(input_stream<int32> * __restrict in_H, input_stream<int32> * __res
         foo = aie::bit_and((int32)((1 << (PT_MSB + 1)) - 1), data_L[i]);
         // halve the size from 32b to 16b
         pts[i] = foo.pack();
+        // keep track of particles that are above the hig pt cut
+        mask_hig_pt[i] = aie::ge(pts[i], HIG_PT);
+        hig_pt_count += mask_hig_pt[i].count();
 
         // unpack eta as singed int
         // align MSB of eta to the MSB of the 32b word
@@ -37,51 +44,41 @@ void unpacker(input_stream<int32> * __restrict in_H, input_stream<int32> * __res
         foo = aie::upshift(data_L[i], 6); 
         // donwshift by 20 bits in order to align the LSB of eta to the LSB of 
         // the 32b word, preserving the sign
-        foo = aie::downshift(foo, 20);
+        foo1 = aie::downshift(foo, 20);
         // halve the size from 32b to 16b
-        etas[i] = foo.pack();
+        etas[i] = foo1.pack();
 
         // unpack phi as signed int (more tricky, because phi hops the two 32b words)
         // isolate the bits of phi in the Lower 32b word
         foo1 = aie::downshift(data_L[i], PHI_SHIFT_L);
-        foo1 = aie::bit_and((int32)((1 << (PHI_MSB_L + 1)) - 1), foo1);
+        foo2 = aie::bit_and((int32)((1 << (PHI_MSB_L + 1)) - 1), foo1);
         // isolate the bits of phi in the Higher 32b word
-        foo2 = aie::bit_and((int32)((1 << (PHI_MSB_H + 1)) - 1), data_H[i]); 
+        foo3 = aie::bit_and((int32)((1 << (PHI_MSB_H + 1)) - 1), data_H[i]); 
 
         for (int j=0; j<V_SIZE; j++)
         {   
-            foo[j] = (foo2[j] << 6) | foo1[j];
+            foo[j] = (foo3[j] << 6) | foo2[j];
         }
         
         // align MSB of phi to the MSB of the 32b word
-        foo = aie::upshift(foo, 21); 
+        foo1 = aie::upshift(foo, 21); 
         // align LSB of phi to the LSB of the 32b word, preserving the sign
-        foo = aie::downshift(foo, 21);
+        foo2 = aie::downshift(foo1, 21);
         // halve the size from 32b to 16b
-        phis[i] = foo.pack();
+        phis[i] = foo2.pack();
 
 
         // unpack pdg_id as an unsigned int
         foo = aie::downshift(data_H[i], PDG_ID_SHIFT);
-        foo = aie::bit_and((int32)((1 << (PDG_ID_MSB + 1)) - 1), foo);
+        foo1 = aie::bit_and((int32)((1 << (PDG_ID_MSB + 1)) - 1), foo);
         // halve the size from 32b to 16b
-        pdg_ids[i] = foo.pack();
+        pdg_ids[i] = foo1.pack();
     }
-    
-    #if defined(__X86SIM__) && defined(__X86DEBUG__)
-    printf("first eta chunk:\n");
-    aie::print(etas[0]);
-    printf("\n");
-    #endif
     
     for (int i=0; i<P_BUNCHES; i++)
     {
         writeincr(out0, pts[i]);
         writeincr(out1, etas[i]);
-    }
-
-    for (int i=0; i<P_BUNCHES; i++)
-    {   
         writeincr(out0, phis[i]);
         writeincr(out1, pdg_ids[i]);
     }
@@ -101,10 +98,6 @@ void filter(input_stream<int16> * __restrict in0, input_stream<int16> * __restri
     {
         pts[i] = readincr_v<V_SIZE>(in0);
         etas[i] = readincr_v<V_SIZE>(in1);
-    }
-
-    for (int i=0; i<P_BUNCHES; i++)
-    {
         phis[i] = readincr_v<V_SIZE>(in0);
         pdg_ids[i] = readincr_v<V_SIZE>(in1);
     }
@@ -112,6 +105,7 @@ void filter(input_stream<int16> * __restrict in0, input_stream<int16> * __restri
     // FILTER PDG ID AND ISOLATION
     // pdg id variables
     aie::mask<V_SIZE> pdg_id_tot_mask[P_BUNCHES], pdg_id_mask1, pdg_id_mask2, pdg_id_mask3, pdg_id_mask4;
+    aie::mask<V_SIZE> pdg_id_mask12, pdg_id_mask34;
 
     // isolation variables
     int16 eta_cur, phi_cur, pt_cur, pt_sum;
@@ -119,8 +113,8 @@ void filter(input_stream<int16> * __restrict in0, input_stream<int16> * __restri
     aie::vector<int16, V_SIZE> pt_to_sum;
     aie::vector<int32, V_SIZE> dr2;
     aie::vector<float, V_SIZE> dr2_float;
-    aie::accum<acc48, V_SIZE> acc;
-    aie::accum<accfloat, V_SIZE> acc_float;
+    aie::accum<acc48, V_SIZE> acc_d_eta2, acc_dr2;
+    aie::accum<accfloat, V_SIZE> acc_dr2_float;
     aie::mask<V_SIZE> is_ge_mindr2, is_le_maxdr2, pt_cut_mask;
     aie::mask<V_SIZE> iso_mask[P_BUNCHES], filter_mask[P_BUNCHES];
 
@@ -139,9 +133,9 @@ void filter(input_stream<int16> * __restrict in0, input_stream<int16> * __restri
         pdg_id_mask3 = aie::eq((int16) 0b100, pdg_ids[i]); // 4
         pdg_id_mask4 = aie::eq((int16) 0b101, pdg_ids[i]); // 5
 
-        pdg_id_mask1 = pdg_id_mask1 | pdg_id_mask2;
-        pdg_id_mask3 = pdg_id_mask3 | pdg_id_mask4;
-        pdg_id_tot_mask[i] = pdg_id_mask1 | pdg_id_mask3;
+        pdg_id_mask12 = pdg_id_mask1 | pdg_id_mask2;
+        pdg_id_mask34 = pdg_id_mask3 | pdg_id_mask4;
+        pdg_id_tot_mask[i] = pdg_id_mask12 | pdg_id_mask34;
 
         for (int j=0; j<V_SIZE; j++)
         {
@@ -163,12 +157,12 @@ void filter(input_stream<int16> * __restrict in0, input_stream<int16> * __restri
                 d_phi = aie::select(d_phi, d_phi_ptwopi, is_lt_mpi); // select element from d_phi if element is geq of -pi, otherwise from d_phi_ptwopi
                 d_phi = aie::select(d_phi, d_phi_mtwopi, is_gt_pi); // select element from d_phi if element is leq of pi, otherwise from d_phi_mtwopi
 
-                acc = aie::mul_square(d_eta); // acc = d_eta ^ 2
-                acc = aie::mac_square(acc, d_phi); // acc = acc + d_phi ^ 2
-                dr2 = acc.to_vector<int32>(0); // convert accumulator into vector
+                acc_d_eta2 = aie::mul_square(d_eta); // acc = d_eta ^ 2
+                acc_dr2 = aie::mac_square(acc_d_eta2, d_phi); // acc = acc + d_phi ^ 2
+                dr2 = acc_dr2.to_vector<int32>(0); // convert accumulator into vector
                 dr2_float = aie::to_float(dr2, 0);
-                acc_float = aie::mul(dr2_float, F_CONV2); // dr2_float = dr2_int * ((pi / 720) ^ 2)
-                dr2_float = acc_float.to_vector<float>(0);
+                acc_dr2_float = aie::mul(dr2_float, F_CONV2); // dr2_float = dr2_int * ((pi / 720) ^ 2)
+                dr2_float = acc_dr2_float.to_vector<float>(0);
 
                 is_ge_mindr2 = aie::ge(dr2_float, MINDR2_FLOAT);
                 is_le_maxdr2 = aie::le(dr2_float, MAXDR2_FLOAT);
@@ -193,10 +187,6 @@ void filter(input_stream<int16> * __restrict in0, input_stream<int16> * __restri
     {
         writeincr(out0, pts[i]);
         writeincr(out1, etas[i]);
-    }
-
-    for (int i=0; i<P_BUNCHES; i++)
-    {   
         writeincr(out0, phis[i]);
         writeincr(out1, pdg_ids[i]);
     }
@@ -214,10 +204,6 @@ void combinatorial(input_stream<int16> * __restrict in0, input_stream<int16> * _
     {
         pts[i] = readincr_v<V_SIZE>(in0);
         etas[i] = readincr_v<V_SIZE>(in1);
-    }
-
-    for (int i=0; i<P_BUNCHES; i++)
-    {
         phis[i] = readincr_v<V_SIZE>(in0);
         pdg_ids[i] = readincr_v<V_SIZE>(in1);
     }
@@ -229,10 +215,9 @@ void combinatorial(input_stream<int16> * __restrict in0, input_stream<int16> * _
     aie::vector<int16, V_SIZE> pt_to_sum;
     aie::vector<int32, V_SIZE> dr2;
     aie::vector<float, V_SIZE> dr2_float;
-    aie::accum<acc48, V_SIZE> acc;
-    aie::accum<accfloat, V_SIZE> acc_float;
+    aie::accum<acc48, V_SIZE> acc_d_eta2, acc_dr2;
+    aie::accum<accfloat, V_SIZE> acc_dr2_float;
     aie::mask<V_SIZE> is_ge_mindr2, is_le_maxdr2, pt_cut_mask;
-    aie::mask<V_SIZE> iso_mask[P_BUNCHES], filter_mask[P_BUNCHES];
 
     // variables for the two-pi check
     aie::mask<V_SIZE> is_gt_pi, is_lt_mpi;
@@ -275,21 +260,12 @@ void combinatorial(input_stream<int16> * __restrict in0, input_stream<int16> * _
             if (!mask_hig_pt[i].test(j)) continue;
 
             hig_target_idx0 = j;
-            #if defined(__X86SIM__) && defined(__X86DEBUG__)
-            printf("hig_target_idx0 = %d (j)\n", hig_target_idx0);
-            #endif
             eta_hig_pt_target0 = etas[i][hig_target_idx0];
             phi_hig_pt_target0 = phis[i][hig_target_idx0];
             pt_hig_pt_target0 = pts[i][hig_target_idx0];
 
             mask_hig_pt_cur0[i] = mask_hig_pt[i];
             mask_hig_pt_cur0[i].clear(hig_target_idx0);
-
-            #if defined(__X86SIM__) && defined(__X86DEBUG__)
-            printf("mask_hig_pt_cur0[i = %d]:\n", i);
-            aie::print(mask_hig_pt_cur0[i]);
-            printf("\n");
-            #endif
 
             for (int k=0; k<P_BUNCHES; k++)
             {
@@ -303,12 +279,12 @@ void combinatorial(input_stream<int16> * __restrict in0, input_stream<int16> * _
                 d_phi = aie::select(d_phi, d_phi_ptwopi, is_lt_mpi); // select element from d_phi if element is geq of -pi, otherwise from d_phi_ptwopi
                 d_phi = aie::select(d_phi, d_phi_mtwopi, is_gt_pi); // select element from d_phi if element is leq of pi, otherwise from d_phi_mtwopi
 
-                acc = aie::mul_square(d_eta); // acc = d_eta ^ 2
-                acc = aie::mac_square(acc, d_phi); // acc = acc + d_phi ^ 2
-                dr2 = acc.to_vector<int32>(0); // convert accumulator into vector
+                acc_d_eta2 = aie::mul_square(d_eta); // acc = d_eta ^ 2
+                acc_dr2 = aie::mac_square(acc_d_eta2, d_phi); // acc = acc + d_phi ^ 2
+                dr2 = acc_dr2.to_vector<int32>(0); // convert accumulator into vector
                 dr2_float = aie::to_float(dr2, 0);
-                acc_float = aie::mul(dr2_float, F_CONV2); // dr2_float = dr2_int * ((pi / 720) ^ 2)
-                dr2_float = acc_float.to_vector<float>(0);
+                acc_dr2_float = aie::mul(dr2_float, F_CONV2); // dr2_float = dr2_int * ((pi / 720) ^ 2)
+                dr2_float = acc_dr2_float.to_vector<float>(0);
 
                 is_ge_mindr2 = aie::ge(dr2_float, MINDR2_ANGSEP_FLOAT);
                 angsep0[k] = is_ge_mindr2 & mask_hig_pt_cur0[k];
@@ -317,28 +293,13 @@ void combinatorial(input_stream<int16> * __restrict in0, input_stream<int16> * _
                 {
                     if (!angsep0[k].test(jj)) continue;
 
-                    #if defined(__X86SIM__) && defined(__X86DEBUG__)
-                    printf("angsep0[k = %d]:\n", k);
-                    aie::print(angsep0[k]);
-                    printf("\n");
-                    #endif
-
                     hig_target_idx1 = jj;
-                    #if defined(__X86SIM__) && defined(__X86DEBUG__)
-                    printf("hig_target_idx1 = %d (jj)\n", hig_target_idx1);
-                    #endif
                     eta_hig_pt_target1 = etas[k][hig_target_idx1];
                     phi_hig_pt_target1 = phis[k][hig_target_idx1];
                     pt_hig_pt_target1 = pts[k][hig_target_idx1];
 
                     mask_hig_pt_cur1[k] = mask_hig_pt_cur0[k];
                     mask_hig_pt_cur1[k].clear(hig_target_idx1);
-
-                    #if defined(__X86SIM__) && defined(__X86DEBUG__)
-                    printf("mask_hig_pt_cur1[k = %d]:\n", k);
-                    aie::print(mask_hig_pt_cur1[i]);
-                    printf("\n");
-                    #endif
 
                     for (int kk=0; kk<P_BUNCHES; kk++)
                     {
@@ -352,12 +313,12 @@ void combinatorial(input_stream<int16> * __restrict in0, input_stream<int16> * _
                         d_phi = aie::select(d_phi, d_phi_ptwopi, is_lt_mpi); // select element from d_phi if element is geq of -pi, otherwise from d_phi_ptwopi
                         d_phi = aie::select(d_phi, d_phi_mtwopi, is_gt_pi); // select element from d_phi if element is leq of pi, otherwise from d_phi_mtwopi
 
-                        acc = aie::mul_square(d_eta); // acc = d_eta ^ 2
-                        acc = aie::mac_square(acc, d_phi); // acc = acc + d_phi ^ 2
-                        dr2 = acc.to_vector<int32>(0); // convert accumulator into vector
+                        acc_d_eta2 = aie::mul_square(d_eta); // acc = d_eta ^ 2
+                        acc_dr2 = aie::mac_square(acc_d_eta2, d_phi); // acc = acc + d_phi ^ 2
+                        dr2 = acc_dr2.to_vector<int32>(0); // convert accumulator into vector
                         dr2_float = aie::to_float(dr2, 0);
-                        acc_float = aie::mul(dr2_float, F_CONV2); // dr2_float = dr2_int * ((pi / 720) ^ 2)
-                        dr2_float = acc_float.to_vector<float>(0);
+                        acc_dr2_float = aie::mul(dr2_float, F_CONV2); // dr2_float = dr2_int * ((pi / 720) ^ 2)
+                        dr2_float = acc_dr2_float.to_vector<float>(0);
 
                         is_ge_mindr2 = aie::ge(dr2_float, MINDR2_ANGSEP_FLOAT);
                         angsep1[kk] = is_ge_mindr2 & mask_hig_pt_cur1[kk];
@@ -366,42 +327,17 @@ void combinatorial(input_stream<int16> * __restrict in0, input_stream<int16> * _
                         {
                             if (!angsep1[kk].test(jjj)) continue;
 
-                            #if defined(__X86SIM__) && defined(__X86DEBUG__)
-                            printf("angsep1[kk = %d]:\n", kk);
-                            aie::print(angsep1[kk]);
-                            printf("\n");
-                            #endif
-
                             hig_target_idx2 = jjj;
-                            #if defined(__X86SIM__) && defined(__X86DEBUG__)
-                            printf("hig_target_idx2 = %d (jjj)\n", hig_target_idx2);
-                            #endif
                             eta_hig_pt_target2 = etas[kk][hig_target_idx2];
                             phi_hig_pt_target2 = phis[kk][hig_target_idx2];
                             pt_hig_pt_target2 = pts[kk][hig_target_idx2];
 
                             d_eta_scalar = eta_hig_pt_target2 - eta_hig_pt_target0;
-                            #if defined(__X86SIM__) && defined(__X86DEBUG__)
-                            printf("d_eta_scalar = %d \n", d_eta_scalar);
-                            #endif
-
                             d_phi_scalar = phi_hig_pt_target2 - phi_hig_pt_target0;
-                            #if defined(__X86SIM__) && defined(__X86DEBUG__)
-                            printf("d_phi_scalar = %d \n", d_phi_scalar);
-                            #endif
                             d_phi_scalar = (d_phi_scalar <= PI) ? ((d_phi_scalar >= MPI) ? d_phi_scalar : d_phi_scalar + TWOPI) : d_phi_scalar + MTWOPI;
-                            #if defined(__X86SIM__) && defined(__X86DEBUG__)
-                            printf("d_phi_scalar (adjusted) = %d \n", d_phi_scalar);
-                            #endif
 
                             dr2_scalar = d_eta_scalar * d_eta_scalar + d_phi_scalar * d_phi_scalar;
-                            #if defined(__X86SIM__) && defined(__X86DEBUG__)
-                            printf("dr2_scalar = %i \n", dr2_scalar);
-                            #endif
                             dr2_float_scalar = dr2_scalar * F_CONV2;
-                            #if defined(__X86SIM__) && defined(__X86DEBUG__)
-                            printf("dr2_float_scalar = %f \n", dr2_float_scalar);
-                            #endif
 
                             if (dr2_float_scalar >= MINDR2_ANGSEP_FLOAT)
                             {
@@ -410,31 +346,16 @@ void combinatorial(input_stream<int16> * __restrict in0, input_stream<int16> * _
                                 charge2 = (pdg_ids[kk][hig_target_idx2] >= 4) ? ((pdg_ids[kk][hig_target_idx2] == 4) ? -1 : 1) : ((pdg_ids[kk][hig_target_idx2] == 2) ? -1 : 1);
 
                                 charge_tot = charge0 + charge1 + charge2;
-                                #if defined(__X86SIM__) && defined(__X86DEBUG__)
-                                printf("charge_tot = %d \n", charge_tot);
-                                #endif
 
                                 if ((charge_tot == 1) | (charge_tot == -1))
                                 {
                                     mass0 = (charge0 > 0) ? MASS_M : MASS_P;
                                     px0 = pt_hig_pt_target0 * PT_CONV * aie::cos(phi_hig_pt_target0 * F_CONV);
-                                    #if defined(__X86SIM__) && defined(__X86DEBUG__)
-                                    printf("px0 = %f \n", px0);
-                                    #endif
                                     py0 = pt_hig_pt_target0 * PT_CONV * aie::sin(phi_hig_pt_target0 * F_CONV);
-                                    #if defined(__X86SIM__) && defined(__X86DEBUG__)
-                                    printf("py0 = %f \n", py0);
-                                    #endif
                                     x = eta_hig_pt_target0 * F_CONV;
                                     sinh = x + ((x * x * x) / 6);
                                     pz0 = pt_hig_pt_target0 * PT_CONV * sinh;
-                                    #if defined(__X86SIM__) && defined(__X86DEBUG__)
-                                    printf("pz0 = %f \n", pz0);
-                                    #endif
                                     e0 = aie::sqrt(px0 * px0 + py0 * py0 + pz0 * pz0 + mass0 * mass0);
-                                    #if defined(__X86SIM__) && defined(__X86DEBUG__)
-                                    printf("e0 = %f \n", e0);
-                                    #endif
                             
                                     mass1 = (charge1 > 0) ? MASS_M : MASS_P;
                                     px1 = pt_hig_pt_target1 * PT_CONV * aie::cos(phi_hig_pt_target1 * F_CONV);
@@ -443,9 +364,6 @@ void combinatorial(input_stream<int16> * __restrict in0, input_stream<int16> * _
                                     sinh = x + ((x * x * x) / 6);
                                     pz1 = pt_hig_pt_target1 * PT_CONV * sinh;
                                     e1 = aie::sqrt(px1 * px1 + py1 * py1 + pz1 * pz1 + mass1 * mass1);
-                                    #if defined(__X86SIM__) && defined(__X86DEBUG__)
-                                    printf("e1 = %f \n", e1);
-                                    #endif
 
                                     mass2 = (charge2 > 0) ? MASS_M : MASS_P;
                                     px2 = pt_hig_pt_target2 * PT_CONV * aie::cos(phi_hig_pt_target2 * F_CONV);
@@ -454,22 +372,13 @@ void combinatorial(input_stream<int16> * __restrict in0, input_stream<int16> * _
                                     sinh = x + ((x * x * x) / 6);
                                     pz2 = pt_hig_pt_target2 * PT_CONV * sinh;
                                     e2 = aie::sqrt(px2 * px2 + py2 * py2 + pz2 * pz2 + mass2 * mass2);
-                                    #if defined(__X86SIM__) && defined(__X86DEBUG__)
-                                    printf("e2 = %f \n", e2);
-                                    #endif
 
                                     px_tot = px0 + px1 + px2;
                                     py_tot = py0 + py1 + py2;
                                     pz_tot = pz0 + pz1 + pz2;
                                     e_tot = e0 + e1 + e2;
-                                    #if defined(__X86SIM__) && defined(__X86DEBUG__)
-                                    printf("e_tot = %f \n", e_tot);
-                                    #endif
 
                                     invariant_mass = aie::sqrt(e_tot * e_tot - px_tot * px_tot - py_tot * py_tot - pz_tot * pz_tot);
-                                    #if defined(__X86SIM__) && defined(__X86DEBUG__)
-                                    printf("invariant_mass = %f \n", invariant_mass);
-                                    #endif
 
                                     if ((invariant_mass >= MIN_MASS) && (invariant_mass <= MAX_MASS))
                                     {
@@ -483,11 +392,6 @@ void combinatorial(input_stream<int16> * __restrict in0, input_stream<int16> * _
                                             triplet[2] = kk * V_SIZE + hig_target_idx2;
                                             triplet[3] = invariant_mass;
                                         }
-                                        #if defined(__X86SIM__) && defined(__X86DEBUG__)
-                                        printf("triplet:\n");
-                                        aie::print(triplet);
-                                        printf("\n");
-                                        #endif
                                     }
                                 }
                             }
@@ -499,8 +403,4 @@ void combinatorial(input_stream<int16> * __restrict in0, input_stream<int16> * _
     }
 
     writeincr(out, triplet);
-
-    #if defined(__X86SIM__) && defined(__X86DEBUG__)
-    printf("\n\n");
-    #endif
 }

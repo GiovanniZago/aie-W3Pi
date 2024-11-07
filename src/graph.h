@@ -19,8 +19,8 @@ class simpleGraph : public graph {
             filter_k = kernel::create(filter);
             combinatorial_k = kernel::create(combinatorial);
 
-            in_H = input_plio::create(plio_32_bits, "data/Puppi_224_H.csv", 360);
-            in_L = input_plio::create(plio_32_bits, "data/Puppi_224_L.csv", 360);
+            in_H = input_plio::create(plio_32_bits, "data/PuppiSignal_224_H.csv", 360);
+            in_L = input_plio::create(plio_32_bits, "data/PuppiSignal_224_L.csv", 360);
 
             out = output_plio::create(plio_32_bits, "data/out.csv", 360);
 
