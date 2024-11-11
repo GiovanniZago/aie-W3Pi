@@ -4,7 +4,7 @@ simpleGraph mygraph;
 
 int main(void) 
 {
-    int N_iter = 8;
+    int N_iter = 3;
 
     mygraph.init();
     mygraph.run(N_iter);

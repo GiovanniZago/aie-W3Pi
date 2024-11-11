@@ -40,10 +40,12 @@ static const float MASS_P = 0.13957039;
 
 using namespace adf;
 
-void unpacker(input_stream<int32> * __restrict in_H, input_stream<int32> * __restrict in_L, output_stream<int16> * __restrict out0, output_stream<int16> * __restrict out1);
+void unpacker(input_stream<int32> * __restrict in_H, input_stream<int32> * __restrict in_L, 
+                output_stream<int16> * __restrict out0, output_stream<int16> * __restrict out1);
 
 void filter(input_stream<int16> * __restrict in0, input_stream<int16> * __restrict in1, output_stream<int16> * __restrict out0, output_stream<int16> * __restrict out1);
 
 void combinatorial(input_stream<int16> * __restrict in0, input_stream<int16> * __restrict in1, output_stream<float> * __restrict out);
+
 
 #endif
