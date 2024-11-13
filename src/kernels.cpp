@@ -7,101 +7,15 @@
 
 using namespace adf;
 
-// void unpack_and_filter(input_stream<int32> * __restrict in_H, input_stream<int32> * __restrict in_L, output_stream<int16> * __restrict out0, output_stream<int16> * __restrict out1)
-// {   
-//     aie::vector<int32, V_SIZE> data_H[P_BUNCHES], data_L[P_BUNCHES]; 
-//     aie::vector<int16, V_SIZE> pt, eta, phi, pdg_id;
-
-//     // auxiliary variables
-//     aie::vector<int32, V_SIZE> foo, foo1, foo2;
-    
-//     // pt and pdg_id selection
-//     aie::mask<V_SIZE> hig_pt_mask;
-//     aie::mask<V_SIZE> pdg_id_mask1, pdg_id_mask2, pdg_id_mask3, pdg_id_mask4, pdg_id_mask12, pdg_id_mask34, pdg_id_tot_mask;
-//     aie::mask<V_SIZE> filter_mask;
-//     int32 filter_mask_int;
-
-//     for (int i=0; i<P_BUNCHES; i++)
-//     {
-//       data_H[i] = readincr_v<V_SIZE>(in_H);
-//       data_L[i] = readincr_v<V_SIZE>(in_L);
-//     }
-    
-//     for (int i=0; i<P_BUNCHES; i++)
-//     chess_prepare_for_pipelining
-//     {
-//         // unpack pt as an unsigned int
-//         foo = aie::bit_and((int32)((1 << (PT_MSB + 1)) - 1), data_L[i]);
-//         // halve the size from 32b to 16b
-//         pt = foo.pack();
-//         hig_pt_mask = aie::ge(pt, HIG_PT);
-
-//         // unpack pdg_id as an unsigned int
-//         foo = aie::downshift(data_H[i], PDG_ID_SHIFT);
-//         foo = aie::bit_and((int32)((1 << (PDG_ID_MSB + 1)) - 1), foo);
-//         // halve the size from 32b to 16b
-//         pdg_id = foo.pack();
-
-//         pdg_id_mask1 = aie::eq((int16) 0b010, pdg_id); // 2
-//         pdg_id_mask2 = aie::eq((int16) 0b011, pdg_id); // 3
-//         pdg_id_mask3 = aie::eq((int16) 0b100, pdg_id); // 4
-//         pdg_id_mask4 = aie::eq((int16) 0b101, pdg_id); // 5
-
-//         pdg_id_mask12 = pdg_id_mask1 | pdg_id_mask2;
-//         pdg_id_mask34 = pdg_id_mask3 | pdg_id_mask4;
-//         pdg_id_tot_mask = pdg_id_mask12 | pdg_id_mask34;
-
-//         // use pt and pdg id mask to create filter_mask
-//         filter_mask = hig_pt_mask & pdg_id_tot_mask;
-//         filter_mask_int = filter_mask.to_uint32();
-
-//         // unpack eta as singed int
-//         // align MSB of eta to the MSB of the 32b word
-//         // since MSB of eta is on the 26th bit, we need a left shift of 6 bits
-//         foo = aie::upshift(data_L[i], 6); 
-//         // donwshift by 20 bits in order to align the LSB of eta to the LSB of 
-//         // the 32b word, preserving the sign
-//         foo = aie::downshift(foo, 20);
-//         // halve the size from 32b to 16b
-//         eta = foo.pack();
-
-//         // unpack phi as signed int (more tricky, because phi hops the two 32b words)
-//         // isolate the bits of phi in the Lower 32b word
-//         foo1 = aie::downshift(data_L[i], PHI_SHIFT_L);
-//         foo1 = aie::bit_and((int32)((1 << (PHI_MSB_L + 1)) - 1), foo1);
-//         // isolate the bits of phi in the Higher 32b word
-//         foo2 = aie::bit_and((int32)((1 << (PHI_MSB_H + 1)) - 1), data_H[i]); 
-
-//         for (int j=0; j<V_SIZE; j++)
-//         {   
-//             foo[j] = (foo2[j] << 6) | foo1[j];
-//         }
-
-//         // align MSB of phi to the MSB of the 32b word
-//         foo = aie::upshift(foo, 21); 
-//         // align LSB of phi to the LSB of the 32b word, preserving the sign
-//         foo = aie::downshift(foo, 21);
-//         // halve the size from 32b to 16b
-//         phi = foo.pack();
-
-//         // send data out
-//         writeincr(out0, pt);
-//         writeincr(out1, eta);
-//         writeincr(out0, phi);
-//         writeincr(out1, pdg_id);
-//         writeincr(out0, filter_mask_int);
-//     }
-// }
-
-void unpack_and_filter(input_stream<int32> * __restrict in_H, input_stream<int32> * __restrict in_L, output_stream<int16> * __restrict out0, output_stream<int16> * __restrict out1)
+void unpack_and_filter(input_stream<int64> * __restrict in, output_stream<int16> * __restrict out0, output_stream<int16> * __restrict out1)
 {   
     // data variables
-    int32 data_H, data_L; 
+    int64 data; 
     int16 pt, eta, phi, pdg_id;
     aie::vector<int16, V_SIZE> pt_vec, eta_vec, phi_vec, pdg_id_vec;
 
     // auxiliary variables
-    int32 foo, foo1, foo2;
+    int64 foo, foo1, foo2;
 
     // filter pt and pdg id
     bool is_hig_pt, is_pdg_id, is_filter;
@@ -112,28 +26,21 @@ void unpack_and_filter(input_stream<int32> * __restrict in_H, input_stream<int32
         filter_mask_int = 0;
 
         for (int j=0; j<V_SIZE; j++)
+        chess_prepare_for_pipelining
         {
-            data_H = readincr(in_H);
-            data_L = readincr(in_L);
+            data = readincr(in);
 
-            pt = ((1 << (PT_MSB + 1)) - 1) & data_L;
+            pt = ((1 << (PT_MSB + 1)) - 1) & data;
             pt_vec[j] = pt;
             is_hig_pt = pt >= HIG_PT;
 
-            foo = data_L << 6;
-            eta = foo >> 20;
+            eta = (data << 38) >> 52;
             eta_vec[j] = eta;
 
-            foo1 = data_L >> PHI_SHIFT_L;
-            foo1 = ((1 << (PHI_MSB_L + 1)) - 1) & foo1;
-            foo2 = ((1 << (PHI_MSB_H + 1)) - 1) & data_H;
-            foo = (foo2 << 6) | foo1;
-            foo = foo << 21;
-            phi = foo >> 21;
+            phi = (data << 27) >> 53;
             phi_vec[j] = phi;
 
-            foo = data_H >> PDG_ID_SHIFT;
-            pdg_id = ((1 << (PDG_ID_MSB + 1)) - 1) & foo;
+            pdg_id = ((1 << (PDG_ID_MSB + 1)) - 1) & (data >> 37);
             pdg_id_vec[j] = pdg_id;
             is_pdg_id = (pdg_id == 2) | (pdg_id == 3) | (pdg_id == 4) | (pdg_id == 5);
 

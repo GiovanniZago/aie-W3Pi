@@ -10,8 +10,7 @@ class simpleGraph : public graph {
         kernel combinatorial_k;
 
     public:
-        input_plio in_H;
-        input_plio in_L;
+        input_plio in;
         output_plio out;
 
         simpleGraph() {
@@ -19,14 +18,11 @@ class simpleGraph : public graph {
             isolation_k = kernel::create(isolation);
             combinatorial_k = kernel::create(combinatorial);
 
-            in_H = input_plio::create(plio_32_bits, "data/Puppi_224_H.csv", 360);
-            in_L = input_plio::create(plio_32_bits, "data/Puppi_224_L.csv", 360);
-
+            in = input_plio::create(plio_64_bits, "data/PuppiSignal_224.csv", 360);
             out = output_plio::create(plio_32_bits, "data/out.csv", 360);
 
             // PL inputs
-            connect<stream>(in_H.out[0], unpack_and_filter_k.in[0]);
-            connect<stream>(in_L.out[0], unpack_and_filter_k.in[1]);
+            connect<stream>(in.out[0], unpack_and_filter_k.in[0]);
 
             // inner connections
             connect<stream>(unpack_and_filter_k.out[0], isolation_k.in[0]);
