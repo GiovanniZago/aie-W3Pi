@@ -18,7 +18,7 @@ class simpleGraph : public graph {
             isolation_k = kernel::create(isolation);
             combinatorial_k = kernel::create(combinatorial);
 
-            in = input_plio::create(plio_64_bits, "data/PuppiSignal_224.csv", 360);
+            in = input_plio::create(plio_64_bits, "data/Puppi_224.csv", 360);
             out = output_plio::create(plio_32_bits, "data/out.csv", 360);
 
             // PL inputs

@@ -12,6 +12,7 @@
 // #define __x86ISODEBUG__
 // #define __x86ANGSEPDEBUG__
 
+static const int16 N_HIG = 16;
 static const int16 PT_MSB = 13;
 static const int16 ETA_MSB = 11;
 static const int16 PHI_SHIFT_L = 26;
@@ -42,11 +43,10 @@ static const float MASS_P = 0.13957039;
 
 using namespace adf;
 
-void unpack_and_filter(input_stream<int64> * __restrict in, output_stream<int16> * __restrict out0, output_stream<int16> * __restrict out1);
+void unpack_and_filter(input_stream<int64> * __restrict in, output_stream<int32> * __restrict out0, output_stream<int32> * __restrict out1);
 
-void isolation(input_stream<int16> * __restrict in0, input_stream<int16> * __restrict in1, output_stream<int16> * __restrict out0, output_stream<int16> * __restrict out1);
+void isolation(input_stream<int32> * __restrict in0, input_stream<int32> * __restrict in1, output_stream<int16> * __restrict out0, output_stream<int16> * __restrict out1);
 
 void combinatorial(input_stream<int16> * __restrict in0, input_stream<int16> * __restrict in1, output_stream<float> * __restrict out);
-
 
 #endif
