@@ -7,56 +7,63 @@
 
 using namespace adf;
 
-void unpack_and_filter(input_stream<int64> * __restrict in, output_stream<int32> * __restrict out0, output_stream<int32> * __restrict out1)
+void unpack_and_filter(input_stream<int64> * __restrict in, output_stream<int16> * __restrict out0, output_stream<int16> * __restrict out1)
 {   
     // data variables
     int64 data; 
-    int32 pt, eta, phi, pdg_id;
+    aie::vector<int16, V_SIZE> pts[P_BUNCHES] = { aie::broadcast<int16, V_SIZE>(0) }, etas[P_BUNCHES] = { aie::broadcast<int16, V_SIZE>(0) }, phis[P_BUNCHES] = { aie::broadcast<int16, V_SIZE>(0) }, pdg_ids[P_BUNCHES] = { aie::broadcast<int16, V_SIZE>(0) };
 
     // filter pt and pdg id
     bool is_hig_pt, is_pdg_id;
-    aie::vector<int32, N_HIG> is_filter;
+    aie::vector<int16, N_HIG> is_filter = aie::broadcast<int16, N_HIG>(0);
     int16 is_filter_idx=0;
+
+    // auxiliary variables
+    int16 out_idx, in_idx;
 
     for (int i=0; i<EV_SIZE; i++)
     {
         data = readincr(in);
+        if (!data) continue;
 
-        pt = ((1 << (PT_MSB + 1)) - 1) & data;
-        eta = (data << 38) >> 52;
-        phi = (data << 27) >> 53;
-        pdg_id = ((1 << (PDG_ID_MSB + 1)) - 1) & (data >> 37);
+        out_idx = i / V_SIZE;
+        in_idx = i % V_SIZE;
 
-        is_hig_pt = pt >= HIG_PT;
-        is_pdg_id = (pdg_id == 2) | (pdg_id == 3) | (pdg_id == 4) | (pdg_id == 5);
+        pts[out_idx][in_idx] = ((1 << (PT_MSB + 1)) - 1) & data;
+        etas[out_idx][in_idx] = (data << 38) >> 52;
+        phis[out_idx][in_idx] = (data << 27) >> 53;
+        pdg_ids[out_idx][in_idx] = ((1 << (PDG_ID_MSB + 1)) - 1) & (data >> 37);
+
+        is_hig_pt = pts[out_idx][in_idx] >= HIG_PT;
+        is_pdg_id = (pdg_ids[out_idx][in_idx] == 2) | (pdg_ids[out_idx][in_idx] == 3) | (pdg_ids[out_idx][in_idx] == 4) | (pdg_ids[out_idx][in_idx] == 5);
 
         if ((is_filter_idx < N_HIG) & (is_hig_pt) & (is_pdg_id)) 
         {
             is_filter[is_filter_idx] = i + 1;
             is_filter_idx++;
         }
+    }
 
-        // send data out
-        writeincr(out0, pt);
-        writeincr(out1, eta);
-        writeincr(out0, phi);
-        writeincr(out1, pdg_id);
+    for (int i=0; i<P_BUNCHES; i++)
+    {
+        writeincr(out0, pts[i]);
+        writeincr(out1, etas[i]);
+        writeincr(out0, phis[i]);
+        writeincr(out1, pdg_ids[i]);
     }
 
     writeincr(out0, is_filter);
 }
 
-void isolation(input_stream<int32> * __restrict in0, input_stream<int32> * __restrict in1, output_stream<int16> * __restrict out0, output_stream<int16> * __restrict out1)
+void isolation(input_stream<int16> * __restrict in0, input_stream<int16> * __restrict in1, output_stream<int16> * __restrict out0, output_stream<int16> * __restrict out1)
 {
     // data variables
     aie::vector<int16, V_SIZE> etas[P_BUNCHES], phis[P_BUNCHES], pts[P_BUNCHES], pdg_ids[P_BUNCHES];
-    aie::vector<int32, N_HIG> is_filter_int32;
     aie::vector<int16, N_HIG> is_filter;
 
     // isolation variables
     int16 out_idx, in_idx;
     int16 pt_sum=0;
-    aie::mask<N_HIG> is_iso;
     aie::vector<int16, V_SIZE> d_eta, d_phi;
     aie::vector<int16, V_SIZE> pt_to_sum;
     aie::vector<int32, V_SIZE> dr2;
@@ -84,17 +91,13 @@ void isolation(input_stream<int32> * __restrict in0, input_stream<int32> * __res
     // READ DATA 
     for (int i=0; i<P_BUNCHES; i++)
     {
-        for (int j=0; j<V_SIZE; j++)
-        {
-            pts[i][j] = readincr(in0);
-            etas[i][j] = readincr(in1);
-            phis[i][j] = readincr(in0);
-            pdg_ids[i][j] = readincr(in1);
-        }
+        pts[i] = readincr_v<V_SIZE>(in0);
+        etas[i] = readincr_v<V_SIZE>(in1);
+        phis[i] = readincr_v<V_SIZE>(in0);
+        pdg_ids[i] = readincr_v<V_SIZE>(in1);
     }
 
-    is_filter_int32 = readincr_v<N_HIG>(in0);
-    is_filter = is_filter_int32.pack();
+    is_filter = readincr_v<N_HIG>(in0);
     aie::mask<N_HIG> is_filter_mask = aie::gt(is_filter, (int16) 0);
     int16 n_filter = is_filter_mask.count();
     bool skip_event = (n_filter < 3);
