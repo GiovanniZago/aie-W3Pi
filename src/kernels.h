@@ -7,12 +7,12 @@
 #define EV_SIZE 224
 #define P_BUNCHES 7
 
-#define __X86DEBUG__ 
+// #define __X86DEBUG__ 
 // #define __X86PTCUTDEBUG__
 // #define __x86ISODEBUG__
 // #define __x86ANGSEPDEBUG__
 
-static const int16 N_HIG = 16;
+static const int16 N_MIN = 16;
 static const int16 PT_MSB = 13;
 static const int16 ETA_MSB = 11;
 static const int16 PHI_SHIFT_L = 26;
@@ -38,14 +38,11 @@ static const float F_CONV = PI_FLOAT / PI;
 static const float F_CONV2 = (PI_FLOAT / PI) * (PI_FLOAT / PI);
 static const float PT_CONV = 0.25;
 static const float MAX_ISO = 0.5;
-static const float MASS_M = 0.1349768;
 static const float MASS_P = 0.13957039;
 
 using namespace adf;
 
-void unpack_and_filter(input_stream<int64> * __restrict in, output_stream<int16> * __restrict out0, output_stream<int16> * __restrict out1);
-
-void isolation(input_stream<int16> * __restrict in0, input_stream<int16> * __restrict in1, output_stream<int16> * __restrict out0, output_stream<int16> * __restrict out1);
+void unpack_filter_iso(input_stream<int64> * __restrict in, output_stream<int16> * __restrict out0, output_stream<int16> * __restrict out1);
 
 void combinatorial(input_stream<int16> * __restrict in0, input_stream<int16> * __restrict in1, output_stream<float> * __restrict out);
 
